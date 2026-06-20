@@ -1,0 +1,36 @@
+{
+  "name": "context-bridge",
+  "version": "0.1.0",
+  "description": "MCP server that bridges the context gap between your codebase and AI coding tools",
+  "main": "src/server.js",
+  "type": "module",
+  "bin": {
+    "context-bridge": "./src/server.js"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "index": "node src/indexer.js",
+    "test": "node --test",
+    "lint": "eslint src/"
+  },
+  "keywords": [
+    "mcp",
+    "ai-coding",
+    "context-management",
+    "developer-tools",
+    "claude-code",
+    "cursor",
+    "knowledge-graph"
+  ],
+  "author": "hussain-alsaibai",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^12.0.0"
+  },
+  "devDependencies": {
+    "eslint": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
