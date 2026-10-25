@@ -335,7 +335,7 @@ function handleMCPRequest(db, request) {
     case 'search_code': {
       const { query, limit = 10, language } = params;
       let sql = `
-        SELECT f.path, f.language, snippet(file_search, 0, '<mark>', '</mark>', '...', 32) as snippet
+        SELECT f.path, f.language, snippet(file_search, 1, '<mark>', '</mark>', '...', 32) as snippet
         FROM file_search
         JOIN files f ON file_search.rowid = f.id
         WHERE file_search MATCH ?
@@ -554,7 +554,7 @@ async function main() {
       process.exit(1);
     }
     const results = db.prepare(`
-      SELECT f.path, f.language, snippet(file_search, 0, '<mark>', '</mark>', '...', 32) as snippet
+      SELECT f.path, f.language, snippet(file_search, 1, '<mark>', '</mark>', '...', 32) as snippet
       FROM file_search
       JOIN files f ON file_search.rowid = f.id
       WHERE file_search MATCH ?
