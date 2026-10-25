@@ -4,7 +4,10 @@
  * Bridges the context gap between your codebase and AI coding tools.
  */
 
-import { Database } from 'better-sqlite3';
+// better-sqlite3 is CommonJS. Node's CJS named-export detection does not
+// expose a 'Database' named export, and the module's default export IS the
+// Database constructor itself.
+import Database from 'better-sqlite3';
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, join, relative, extname, dirname } from 'path';
 import { createServer } from 'http';
@@ -65,10 +68,94 @@ function initDb(dbPath) {
 }
 
 // --- File Scanner ---
+// Expand a brace group like {js,ts,jsx} into its alternatives.
+function expandBraces(pattern) {
+  const open = pattern.indexOf('{');
+  if (open === -1) return [pattern];
+
+  let depth = 0;
+  let close = -1;
+  const parts = [];
+  let current = '';
+  for (let i = open; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '{') {
+      depth++;
+      if (depth === 1) continue;
+    } else if (ch === '}') {
+      depth--;
+      if (depth === 0) {
+        close = i;
+        parts.push(current);
+        break;
+      }
+    } else if (ch === ',' && depth === 1) {
+      parts.push(current);
+      current = '';
+      continue;
+    }
+    current += ch;
+  }
+  if (close === -1) return [pattern];
+
+  const prefix = pattern.slice(0, open);
+  const suffix = pattern.slice(close + 1);
+  const out = [];
+  for (const part of parts) {
+    for (const expanded of expandBraces(prefix + part + suffix)) {
+      out.push(expanded);
+    }
+  }
+  return out;
+}
+
+// Backslash, kept in a constant so the regex escaping below stays readable.
+const BS = String.fromCharCode(92);
+
+// Translate a single glob pattern (no braces) into an anchored RegExp.
+// Supports ** (zero or more path segments), * (within one segment) and ?.
+function globToRegExp(pattern) {
+  let re = '';
+  for (let i = 0; i < pattern.length; i++) {
+    const ch = pattern[i];
+    if (ch === '*') {
+      if (pattern[i + 1] === '*') {
+        i++;
+        if (pattern[i + 1] === '/') {
+          i++;
+          re += '(?:.*/)?';
+        } else {
+          re += '.*';
+        }
+      } else {
+        re += '[^/]*';
+      }
+    } else if (ch === '?') {
+      re += '[^/]';
+    } else if ('.+^$()|[]'.includes(ch)) {
+      re += BS + ch;
+    } else if (ch === BS) {
+      re += BS + BS;
+    } else {
+      re += ch;
+    }
+  }
+  return new RegExp('^' + re + '$');
+}
+
+// Build matchers for a list of glob patterns.
+function buildMatchers(patterns) {
+  const expanded = [];
+  for (const p of patterns) {
+    for (const e of expandBraces(p)) expanded.push(e);
+  }
+  return expanded.map(globToRegExp);
+}
+
 function* walkDir(dir, include, exclude, maxSize = 500 * 1024) {
   const stack = [resolve(dir)];
-  const includePatterns = include.map(p => new RegExp(p.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*')));
-  const excludePatterns = exclude.map(p => new RegExp(p.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*')));
+  const includePatterns = buildMatchers(include);
+  const excludePatterns = buildMatchers(exclude);
 
   while (stack.length) {
     const current = stack.pop();
@@ -172,10 +259,21 @@ function indexProject(db, config) {
   console.log(`  Include: ${include.join(', ')}`);
   console.log(`  Exclude: ${exclude.join(', ')}`);
 
-  const insertFile = db.prepare(`
-    INSERT OR REPLACE INTO files (path, content, language, last_modified, size)
+  // Re-indexing must not violate the symbols -> files foreign key.
+  // 'INSERT OR REPLACE' deletes the old files row, which cascades into a
+  // FK violation once that file already has symbols. So: upsert the file
+  // row, and clear its old symbols before writing the new ones.
+  const upsertFile = db.prepare(`
+    INSERT INTO files (path, content, language, last_modified, size)
     VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(path) DO UPDATE SET
+      content = excluded.content,
+      language = excluded.language,
+      last_modified = excluded.last_modified,
+      size = excluded.size,
+      indexed_at = unixepoch()
   `);
+  const clearSymbols = db.prepare('DELETE FROM symbols WHERE file_id = ?');
   const insertSymbol = db.prepare(`
     INSERT INTO symbols (file_id, name, type, line_start, signature)
     VALUES (?, ?, ?, ?, ?)
@@ -184,6 +282,7 @@ function indexProject(db, config) {
 
   let fileCount = 0;
   let symbolCount = 0;
+  let skippedCount = 0;
 
   const tx = db.transaction(() => {
     for (const file of walkDir(root, include, exclude, maxSize)) {
@@ -191,11 +290,12 @@ function indexProject(db, config) {
         const content = readFileSync(file.fullPath, 'utf-8');
         const language = detectLanguage(file.path);
 
-        insertFile.run(file.path, content, language, Math.floor(file.mtime / 1000), file.size);
+        upsertFile.run(file.path, content, language, Math.floor(file.mtime / 1000), file.size);
         fileCount++;
 
         const row = getFileId.get(file.path);
         if (row) {
+          clearSymbols.run(row.id);
           const symbols = extractSymbols(content, language);
           for (const sym of symbols) {
             insertSymbol.run(row.id, sym.name, sym.type, sym.line_start, sym.signature);
@@ -203,7 +303,9 @@ function indexProject(db, config) {
           }
         }
       } catch (err) {
-        // Binary or unreadable file, skip
+        // Binary or unreadable file, skip - but do not hide it silently.
+        skippedCount++;
+        console.error(`[Context Bridge] Skipped ${file.path}: ${err.message}`);
       }
     }
   });
@@ -218,6 +320,9 @@ function indexProject(db, config) {
     SELECT id, name, signature, docstring FROM symbols;
   `);
 
+  if (skippedCount > 0) {
+    console.log(`[Context Bridge] Skipped ${skippedCount} unreadable file(s).`);
+  }
   console.log(`[Context Bridge] Indexed ${fileCount} files, ${symbolCount} symbols.`);
   return { fileCount, symbolCount };
 }

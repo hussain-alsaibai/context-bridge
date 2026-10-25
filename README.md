@@ -26,19 +26,25 @@ Context Bridge solves this by indexing your codebase into a local knowledge grap
 ## Quick Start
 
 ```bash
-# Install globally
-npm install -g context-bridge
+# Clone and install locally
+git clone https://github.com/hussain-alsaibai/context-bridge.git
+cd context-bridge && npm install
 
 # Initialize in your project
 cd your-project
-context-bridge init
+node /path/to/context-bridge/src/server.js init
 
 # Start the MCP server
-context-bridge serve
+node /path/to/context-bridge/src/server.js serve
 
 # Or use with Claude Code
-claude mcp add context-bridge -- node context-bridge serve
+claude mcp add context-bridge -- node /path/to/context-bridge/src/server.js serve
 ```
+
+> **Note:** the unscoped npm name `context-bridge` is owned by an unrelated
+> third-party package, so `npm install -g context-bridge` installs that package
+> instead of this one. Use the clone-and-install steps above until an official
+> npm release under a scoped name is available.
 
 ## Configuration
 

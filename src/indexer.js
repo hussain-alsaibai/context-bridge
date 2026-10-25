@@ -4,7 +4,10 @@
  * Can be run as a cron job or pre-commit hook
  */
 
-import { Database } from 'better-sqlite3';
+// better-sqlite3 is CommonJS. Node's CJS named-export detection does not
+// expose a 'Database' named export, and the module's default export IS the
+// Database constructor itself.
+import Database from 'better-sqlite3';
 import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, join, relative, extname } from 'path';
 

@@ -1,0 +1,108 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SERVER = join(ROOT, 'src', 'server.js');
+
+function makeProject() {
+  const dir = mkdtempSync(join(tmpdir(), 'cb-test-'));
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'src', 'app.js'), 'export function hello(name) { return name; }\n');
+  writeFileSync(join(dir, 'src', 'util.js'), 'export function slugify(s) { return s.trim(); }\n');
+  return dir;
+}
+
+function run(args, cwd) {
+  return execFileSync('node', [SERVER, ...args], { cwd, encoding: 'utf-8' });
+}
+
+function countIndexed(out) {
+  const m = out.match(/Indexed (\d+) files, (\d+) symbols/);
+  return m ? { files: Number(m[1]), symbols: Number(m[2]) } : null;
+}
+
+// Regression: the glob matcher used to translate only '*', so the default
+// include pattern '**/*.{js,ts,...}' matched nothing and the indexer always
+// reported 0 files.
+test('indexes files with the default brace-expanded include pattern', () => {
+  const dir = makeProject();
+  try {
+    run(['init'], dir);
+    const counts = countIndexed(run(['index'], dir));
+    assert.ok(counts, 'expected an index summary line');
+    assert.equal(counts.files, 2, 'expected both source files to be indexed');
+    assert.ok(counts.symbols >= 2, 'expected symbols to be extracted');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Regression: 'INSERT OR REPLACE' on files deleted the old row, violating the
+// symbols -> files foreign key on the second index. The error was swallowed,
+// so a re-index silently produced 0 files.
+test('re-indexing an existing database does not lose files', () => {
+  const dir = makeProject();
+  try {
+    run(['init'], dir);
+    const first = countIndexed(run(['index'], dir));
+    const second = countIndexed(run(['index'], dir));
+    const third = countIndexed(run(['index'], dir));
+    assert.equal(first.files, 2);
+    assert.equal(second.files, 2, 'second index must still find the files');
+    assert.equal(third.files, 2, 'third index must still find the files');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Regression: better-sqlite3 is CommonJS and exposes no 'Database' named
+// export, so 'import { Database } from "better-sqlite3"' threw on startup
+// and the package could not run at all.
+test('the server starts and handles an MCP request over stdio', () => {
+  const dir = makeProject();
+  try {
+    run(['init'], dir);
+    // Disable the filesystem watcher: a watched process never exits, which
+    // would hang execFileSync below.
+    const cfgPath = join(dir, '.context-bridge.json');
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+    cfg.watch = false;
+    writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+    const input = JSON.stringify({ id: 1, tool: 'search_code', params: { query: 'slugify' } });
+    const out = execFileSync('node', [SERVER, 'serve'], {
+      cwd: dir,
+      encoding: 'utf-8',
+      input: input + '\n',
+    });
+    const line = out.split('\n').find(l => l.startsWith('{') && l.includes('"id":1'));
+    assert.ok(line, 'expected an MCP JSON-RPC response');
+    const parsed = JSON.parse(line);
+    assert.equal(parsed.id, 1);
+    assert.ok(Array.isArray(parsed.result.results), 'expected search results');
+    assert.ok(parsed.result.results.length > 0, 'expected at least one match');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The exclude list must keep vendor/build directories out of the index.
+test('excluded directories are not indexed', () => {
+  const dir = makeProject();
+  try {
+    mkdirSync(join(dir, 'node_modules', 'pkg'), { recursive: true });
+    writeFileSync(join(dir, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+    mkdirSync(join(dir, 'dist'), { recursive: true });
+    writeFileSync(join(dir, 'dist', 'bundle.js'), 'var a = 1;\n');
+    writeFileSync(join(dir, 'src', 'app.test.js'), 'export const t = 1;\n');
+    run(['init'], dir);
+    const counts = countIndexed(run(['index'], dir));
+    assert.equal(counts.files, 2, 'node_modules, dist and *.test.js must be excluded');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
