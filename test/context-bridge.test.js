@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SERVER = join(ROOT, 'src', 'server.js');
+const INDEXER = join(ROOT, 'src', 'indexer.js');
 
 function makeProject() {
   const dir = mkdtempSync(join(tmpdir(), 'cb-test-'));
@@ -102,6 +103,49 @@ test('excluded directories are not indexed', () => {
     run(['init'], dir);
     const counts = countIndexed(run(['index'], dir));
     assert.equal(counts.files, 2, 'node_modules, dist and *.test.js must be excluded');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Regression: the standalone indexer (the documented cron-job / pre-commit
+// entry point) imported './server.js' for its side effects. That started the
+// MCP stdio server instead of indexing anything, so 'npm run index' never
+// indexed. It also imported Database, readdirSync, statSync, join, relative
+// and extname without using any of them.
+test('the standalone indexer indexes a project without starting the server', () => {
+  const dir = makeProject();
+  try {
+    run(['init'], dir);
+    rmSync(join(dir, '.context-bridge'), { recursive: true, force: true });
+
+    const out = execFileSync('node', [INDEXER, dir], { encoding: 'utf-8' });
+    const counts = countIndexed(out);
+    assert.ok(counts, 'expected an index summary line from the standalone indexer');
+    assert.equal(counts.files, 2, 'the standalone indexer must index both source files');
+    assert.ok(counts.symbols >= 2, 'the standalone indexer must extract symbols');
+    assert.ok(!out.includes('MCP'), 'the standalone indexer must not start the MCP server');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Regression: initDb opened the sqlite file without creating its directory.
+// 'context-bridge init' created .context-bridge/, but the standalone indexer
+// and any cron job on a fresh checkout did not, and it crashed with
+// "Cannot open database because the directory does not exist".
+test('the indexer creates the database directory when it is missing', () => {
+  const dir = makeProject();
+  try {
+    run(['init'], dir);
+    rmSync(join(dir, '.context-bridge'), { recursive: true, force: true });
+
+    const out = execFileSync('node', [INDEXER, dir], { encoding: 'utf-8' });
+    assert.ok(countIndexed(out), 'expected the indexer to run without a database directory');
+    assert.ok(
+      existsSync(join(dir, '.context-bridge', 'db.sqlite')),
+      'expected the database file to be created'
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

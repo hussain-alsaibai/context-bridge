@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # better-sqlite3 is a native module, so a compiler toolchain is needed
+      # to build it from source. GitHub's ubuntu-latest runners already have
+      # build-essential; a local install without a compiler falls back to the
+      # prebuilt binary, and fails if neither is available.
+      - name: Install dependencies
+        run: npm install
+
+      # This suite covers the three P0 bugs that shipped broken from launch
+      # (2026-06-20) until 2026-10-25, plus the standalone-indexer and
+      # missing-database-directory bugs. It must run on every commit.
+      - name: Run tests
+        run: npm test
+
+      - name: Lint
+        run: npm run lint

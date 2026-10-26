@@ -8,7 +8,7 @@
 // expose a 'Database' named export, and the module's default export IS the
 // Database constructor itself.
 import Database from 'better-sqlite3';
-import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs';
 import { resolve, join, relative, extname, dirname } from 'path';
 import { createServer } from 'http';
 
@@ -16,6 +16,12 @@ const VERSION = '0.1.0';
 
 // --- Database Setup ---
 function initDb(dbPath) {
+  // The database directory must exist before better-sqlite3 opens the file.
+  // 'context-bridge init' creates it, but the standalone indexer (and any
+  // cron job running on a fresh checkout) does not, and it used to crash
+  // with "Cannot open database because the directory does not exist".
+  mkdirSync(dirname(resolve(dbPath)), { recursive: true });
+
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
 
@@ -569,7 +575,20 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('[Context Bridge] Error:', err);
-  process.exit(1);
-});
+// --- Public API ---
+// Exported so that other entry points (notably src/indexer.js) can reuse the
+// database setup and the indexer instead of re-implementing — and breaking —
+// their own copies.
+export { initDb, indexProject, loadConfig, main };
+
+// Only run the CLI when this file is executed directly. Importing it (for
+// example from indexer.js) must not start the MCP server.
+const isDirectRun = process.argv[1] &&
+  (process.argv[1].endsWith('server.js') || process.argv[1].endsWith('context-bridge'));
+
+if (isDirectRun) {
+  main().catch(err => {
+    console.error('[Context Bridge] Error:', err);
+    process.exit(1);
+  });
+}
