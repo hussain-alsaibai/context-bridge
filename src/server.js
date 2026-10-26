@@ -335,7 +335,52 @@ function indexProject(db, config) {
 
 // --- MCP Protocol Handlers ---
 function handleMCPRequest(db, request) {
-  const { tool, params } = request;
+  // A real MCP client speaks JSON-RPC: {jsonrpc, id, method, params}.
+  // The legacy shape this used to read ({tool, params}) is not something any
+  // client sends, so every legitimate request arrived with tool === undefined
+  // and fell through to "Unknown tool: undefined".
+  //
+  // Both dialects are accepted: JSON-RPC for real clients, and the legacy
+  // {tool, params} shape for existing callers.
+  let tool = request.tool;
+  let params = request.params || {};
+  const method = request.method;
+
+  if (method === 'tools/call') {
+    tool = (params && params.name) || tool;
+    params = (params && params.arguments) || {};
+  } else if (method === 'initialize') {
+    return {
+      protocolVersion: '2025-06-18',
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: 'context-bridge', version: '0.2.1' },
+    };
+  } else if (method === 'tools/list') {
+    return {
+      tools: [
+        {
+          name: 'search_code',
+          description: 'Search the indexed codebase for a query.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'FTS5 query string.' },
+              limit: { type: 'integer', description: 'Max results (default 10).' },
+              language: { type: 'string', description: 'Filter by language.' },
+            },
+            required: ['query'],
+          },
+        },
+      ],
+    };
+  } else if (method === 'server/discover') {
+    // 2026-07-28 spec: initialize was removed, server/discover is mandatory.
+    return {
+      protocolVersion: '2026-07-28',
+      capabilities: { tools: { listChanged: false } },
+      serverInfo: { name: 'context-bridge', version: '0.2.1' },
+    };
+  }
 
   switch (tool) {
     case 'search_code': {
@@ -452,9 +497,17 @@ function startStdioServer(db) {
       try {
         const request = JSON.parse(line);
         const result = handleMCPRequest(db, request);
-        process.stdout.write(JSON.stringify({ id: request.id, result }) + '\n');
+        if (request.jsonrpc || request.method) {
+          process.stdout.write(
+            JSON.stringify({ jsonrpc: '2.0', id: request.id, result }) + '\n',
+          );
+        } else {
+          process.stdout.write(JSON.stringify({ id: request.id, result }) + '\n');
+        }
       } catch (err) {
-        process.stdout.write(JSON.stringify({ error: err.message }) + '\n');
+        process.stdout.write(
+          JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32603, message: err.message } }) + '\n',
+        );
       }
     }
   });

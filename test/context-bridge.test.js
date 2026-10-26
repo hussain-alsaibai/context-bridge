@@ -64,6 +64,64 @@ test('re-indexing an existing database does not lose files', () => {
 // Regression: better-sqlite3 is CommonJS and exposes no 'Database' named
 // export, so 'import { Database } from "better-sqlite3"' threw on startup
 // and the package could not run at all.
+test('a real MCP client handshake works over stdio (JSON-RPC)', () => {
+  // Regression: the server used to read {tool, params}, which is not a shape
+  // any MCP client sends. Every real request arrived with tool === undefined
+  // and returned 'Unknown tool: undefined', while the old test asserted the
+  // same wrong shape and stayed green. This drives the actual JSON-RPC
+  // dialect a client uses.
+  const dir = makeProject();
+  try {
+    run(['init'], dir);
+    const cfgPath = join(dir, '.context-bridge.json');
+    const cfg = JSON.parse(readFileSync(cfgPath, 'utf-8'));
+    cfg.watch = false;
+    writeFileSync(cfgPath, JSON.stringify(cfg, null, 2));
+
+    const requests = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: {} },
+      { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
+      {
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'search_code', arguments: { query: 'slugify' } },
+      },
+    ].map((r) => JSON.stringify(r)).join('\n');
+
+    const out = execFileSync('node', [SERVER, 'serve'], {
+      cwd: dir,
+      encoding: 'utf-8',
+      input: requests + '\n',
+    });
+
+    const lines = out.split('\n').filter((l) => l.trim().startsWith('{'));
+    const parsed = lines.map((l) => JSON.parse(l));
+
+    const init = parsed.find((m) => m.id === 1);
+    assert.ok(init, 'expected an initialize response');
+    assert.equal(init.jsonrpc, '2.0');
+    assert.ok(init.result.serverInfo, 'initialize must report serverInfo');
+    assert.ok(init.result.protocolVersion, 'initialize must report a protocolVersion');
+
+    const list = parsed.find((m) => m.id === 2);
+    assert.ok(list, 'expected a tools/list response');
+    assert.ok(Array.isArray(list.result.tools), 'tools/list must return an array');
+    assert.ok(
+      list.result.tools.some((t) => t.name === 'search_code'),
+      'tools/list must advertise search_code',
+    );
+
+    const call = parsed.find((m) => m.id === 3);
+    assert.ok(call, 'expected a tools/call response');
+    assert.ok(!call.error, 'tools/call must not error');
+    assert.ok(Array.isArray(call.result.results), 'expected search results');
+    assert.ok(call.result.results.length > 0, 'expected at least one match');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the server starts and handles an MCP request over stdio', () => {
   const dir = makeProject();
   try {
