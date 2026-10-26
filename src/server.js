@@ -12,7 +12,7 @@ import { readFileSync, existsSync, readdirSync, statSync, mkdirSync } from 'fs';
 import { resolve, join, relative, extname, dirname } from 'path';
 import { createServer } from 'http';
 
-const VERSION = '0.1.0';
+const VERSION = '0.2.0';
 
 // --- Database Setup ---
 function initDb(dbPath) {

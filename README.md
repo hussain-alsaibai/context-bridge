@@ -87,6 +87,19 @@ Create `.context-bridge.json` in your project root:
                         └──────────────┘
 ```
 
+## Status
+
+**v0.2.0** — the first release in which the package actually runs end to end.
+
+- `v0.1.0` shipped on 2026-06-20 and was broken: it threw on startup, matched
+  no files, and lost the index on every re-index. It was fixed on 2026-10-25 in
+  commit `2cc4ee9`.
+- The standalone indexer (`src/indexer.js`) never indexed anything — it
+  started the MCP server instead. Fixed in v0.2.0.
+- CI now runs on every push and pull request: install, test, lint.
+
+Run the test suite with `npm test` (6 tests).
+
 ## License
 
 MIT
