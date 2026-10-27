@@ -1,11 +1,11 @@
 {
   "name": "context-bridge",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "MCP server that bridges the context gap between your codebase and AI coding tools",
   "main": "src/server.js",
   "type": "module",
   "bin": {
-    "context-bridge": "./src/server.js"
+    "context-bridge": "src/server.js"
   },
   "scripts": {
     "start": "node src/server.js",

@@ -89,16 +89,22 @@ Create `.context-bridge.json` in your project root:
 
 ## Status
 
-**v0.2.0** — the first release in which the package actually runs end to end.
+**v0.2.1** — the server speaks JSON-RPC, the dialect every MCP client uses.
 
 - `v0.1.0` shipped on 2026-06-20 and was broken: it threw on startup, matched
   no files, and lost the index on every re-index. It was fixed on 2026-10-25 in
   commit `2cc4ee9`.
 - The standalone indexer (`src/indexer.js`) never indexed anything — it
   started the MCP server instead. Fixed in v0.2.0.
+- `v0.2.0` shipped a handler that read `{tool, params}`. No MCP client sends
+  that shape — clients speak JSON-RPC `{jsonrpc, id, method, params}` — so
+  every real request arrived with `tool === undefined` and fell through to
+  "Unknown tool: undefined". The four existing tests stayed green because they
+  asserted the same wrong shape. Fixed in v0.2.1 (commit `688f79c`), which
+  adds a contract test that drives a real handshake over stdio.
 - CI now runs on every push and pull request: install, test, lint.
 
-Run the test suite with `npm test` (6 tests).
+Run the test suite with `npm test` (7 tests).
 
 ## License
 
